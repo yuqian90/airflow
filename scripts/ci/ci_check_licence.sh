@@ -33,7 +33,7 @@ script_start
 
 rebuild_image_for_checklicence
 
-docker run "${AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS[@]}" -t \
+docker run "${AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS[@]}" -t \
        --env AIRFLOW_CI_VERBOSE="${VERBOSE}" \
        --env HOST_USER_ID="$(id -ur)" \
        --env HOST_GROUP_ID="$(id -gr)" \

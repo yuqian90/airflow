@@ -58,7 +58,7 @@ jobs:
       install: skip
     - name: Check license header
       stage: pre-test
-      script: ./scripts/ci/ci_check_license.sh
+      script: ./scripts/ci/ci_check_licence.sh
       install: skip
     - name: Lint Dockerfile
       stage: pre-test

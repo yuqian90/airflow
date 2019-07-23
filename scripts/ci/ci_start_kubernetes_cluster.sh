@@ -18,11 +18,8 @@
 #  specific language governing permissions and limitations
 #  under the License.
 
-#
-# Fixes ownership for files created inside container (files owned by root will be owned by host user)
-#
+set -xeuo pipefail
 
-set -euo pipefail
 MY_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # shellcheck source=./_utils.sh
@@ -32,24 +29,6 @@ basic_sanity_checks
 
 script_start
 
-export PYTHON_VERSION=${PYTHON_VERSION:="3.6"}
-export CONTAINER_REGISTRY=${CONTAINER_REGISTRY:="apache"}
-export CONTAINER_REPO=${CONTAINER_REPO:="airflow"}
-export WEBSERVER_HOST_PORT=${WEBSERVER_HOST_PORT:="8080"}
-export PYTHONDONTWRITEBYTECODE="true"
-
-export AIRFLOW_CONTAINER_DOCKER_IMAGE=\
-${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${AIRFLOW_CONTAINER_BRANCH_NAME}-python${PYTHON_VERSION}-ci
-
-HOST_USER_ID="$(id -ur)"
-export HOST_USER_ID
-
-HOST_GROUP_ID="$(id -gr)"
-export HOST_GROUP_ID
-
-docker-compose \
-    -f "${MY_DIR}/docker-compose.yml" \
-    -f "${MY_DIR}/docker-compose-local.yml" \
-    run --no-deps airflow-testing /opt/airflow/scripts/ci/in_container/run_fix_ownership.sh
+kind create cluster airflow-test-cluster
 
 script_end

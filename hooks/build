@@ -47,6 +47,10 @@ STEP_STARTED="false"
 PYTHON_VERSION_FOR_DEFAULT_IMAGE=3.6
 AIRFLOW_CI_VERBOSE=${AIRFLOW_CI_VERBOSE:="false"}
 
+if [[ ${AIRFLOW_CI_VERBOSE} == "true" ]]; then
+  set -x
+fi
+
 function end_step {
     if [[ "${STEP_STARTED}" != "true" ]]; then
         return
@@ -139,13 +143,22 @@ function build_image {
 
 start_step "Setting variables"
 
-# You can override DOCKERHUB_USER to use your own DockerHub account and play with your
+# You can override CONTAINER_REGISTRY to use your own registry and play with your
 # own docker images. In this case you can build images locally and push them
-export DOCKERHUB_USER=${DOCKERHUB_USER:="apache"}
+# the registry might be DockerHub's user name in which case just account is needed
+# or full URL to container registry
+export CONTAINER_REGISTRY=${CONTAINER_REGISTRY:="apache"}
 
-# You can override DOCKERHUB_REPO to use your own DockerHub repository and play with your
+# You can override CONTAINER_REPO to use your own repository in registry and play with your
 # own docker images. In this case you can build images locally and push them
-export DOCKERHUB_REPO=${DOCKERHUB_REPO:="airflow"}
+export CONTAINER_REPO=${CONTAINER_REPO:="airflow"}
+
+# Container registry used for cache - by default it's the same as the for which we build but it might be
+# also a different one
+export CACHE_CONTAINER_REGISTRY=${CACHE_CONTAINER_REGISTRY:=${CONTAINER_REGISTRY}}
+# Container repo used for cache - by default it's the same as the for which we build but it might be
+# also a different one
+export CACHE_CONTAINER_REPO=${CACHE_CONTAINER_REPO:=${CONTAINER_REPO}}
 
 # Determine python version from the local python on the path.
 # You can override it with PYTHON_VERSION because all python version dependencies
@@ -155,7 +168,7 @@ export PYTHON_VERSION=\
 ${PYTHON_VERSION:=$(python -c 'import sys;print("%s.%s" % (sys.version_info.major, sys.version_info.minor))')}
 
 # shellcheck source=./_default_branch.sh
-. ${MY_DIR}/_default_branch.sh
+. "${MY_DIR}/_default_branch.sh"
 
 # Source brnnch will be set in DockerHub
 SOURCE_BRANCH=${SOURCE_BRANCH:=${DEFAULT_BRANCH}}
@@ -170,7 +183,7 @@ echo
 # IMAGE_NAME might come from DockerHub and we decide which PYTHON_VERSION to use based on it (see below)
 # In case IMAGE_NAME is not set we determine PYTHON_VERSION based on the default python on the path
 # So in virtualenvs it will use the virtualenv's PYTHON_VERSION.
-export BASE_IMAGE_NAME=${IMAGE_NAME:=${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${AIRFLOW_CONTAINER_BRANCH_NAME}-python${PYTHON_VERSION}}
+export BASE_IMAGE_NAME=${IMAGE_NAME:=${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${AIRFLOW_CONTAINER_BRANCH_NAME}-python${PYTHON_VERSION}}
 
 echo
 echo "BASE_IMAGE_NAME=${BASE_IMAGE_NAME:=} (final image will have -ci, -ci-slim suffixes)"
@@ -208,15 +221,15 @@ echo
 echo "PYTHON_VERSION=${PYTHON_VERSION}"
 echo
 
-if [[ ! ${LOCAL_BASE_IMAGE_NAME} == ${DOCKERHUB_USER}/${DOCKERHUB_REPO}* ]]; then
+if [[ ! ${LOCAL_BASE_IMAGE_NAME} == ${CONTAINER_REGISTRY}/${CONTAINER_REPO}* ]]; then
     echo >&2
-    echo >&2 "ERROR! The ${LOCAL_BASE_IMAGE_NAME} does not start with ${DOCKERHUB_USER}/${DOCKERHUB_REPO}"
+    echo >&2 "ERROR! The ${LOCAL_BASE_IMAGE_NAME} does not start with ${CONTAINER_REGISTRY}/${CONTAINER_REPO}"
     echo >&2
     exit 1
 fi
 
 # Extract IMAGE_TAG from LOCAL_BASE_IMAGE_NAME (apache/airflow:master-python3.6 -> master-python3.6)
-IMAGE_TAG=${LOCAL_BASE_IMAGE_NAME##${DOCKERHUB_USER}/${DOCKERHUB_REPO}:}
+IMAGE_TAG=${LOCAL_BASE_IMAGE_NAME##${CONTAINER_REGISTRY}/${CONTAINER_REPO}:}
 echo
 echo "Image tag: ${IMAGE_TAG}"
 echo
@@ -298,8 +311,7 @@ export AIRFLOW_CONTAINER_FORCE_PULL_IMAGES=${AIRFLOW_CONTAINER_FORCE_PULL_IMAGES
 export AIRFLOW_CONTAINER_SKIP_LATEST_PYTHON_PULL=${AIRFLOW_CONTAINER_SKIP_LATEST_PYTHON_PULL:=${CI}}
 
 # Skips downloading and building the slim image of airflow
-# This is set to true by default in CI test environment (we only need full CI image then)
-export AIRFLOW_CONTAINER_SKIP_SLIM_CI_IMAGE=${AIRFLOW_CONTAINER_SKIP_SLIM_CI_IMAGE:=${CI}}
+export AIRFLOW_CONTAINER_SKIP_SLIM_CI_IMAGE=${AIRFLOW_CONTAINER_SKIP_SLIM_CI_IMAGE:="false"}
 echo "Skip slim image: ${AIRFLOW_CONTAINER_SKIP_SLIM_CI_IMAGE}"
 
 # Skips downloading and building the CI image, full CI-enabled image of airflow
@@ -330,24 +342,29 @@ echo "The build optimised for CI: ${AIRFLOW_CONTAINER_CI_OPTIMISED_BUILD}"
 export PYTHON_BASE_IMAGE=python:${PYTHON_VERSION}-slim-stretch
 
 if [[ "${AIRFLOW_RELEASE_BUILD}" == "true" ]]; then
-    export AIRFLOW_SLIM_CI_IMAGE="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${AIRFLOW_VERSION}-python${PYTHON_VERSION}-ci-slim"
-    export AIRFLOW_SLIM_CI_IMAGE_DEFAULT="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${AIRFLOW_VERSION}-ci-slim"
-    export AIRFLOW_SLIM_CI_IMAGE_LATEST="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:latest-python${PYTHON_VERSION}-${TAG_PREFIX}-ci-slim"
-    export AIRFLOW_SLIM_CI_IMAGE_LATEST_DEFAULT="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:latest-${TAG_PREFIX}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${AIRFLOW_VERSION}-python${PYTHON_VERSION}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE_CACHE="${CACHE_CONTAINER_REGISTRY}/${CACHE_CONTAINER_REPO}:${AIRFLOW_VERSION}-python${PYTHON_VERSION}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE_DEFAULT="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${AIRFLOW_VERSION}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE_LATEST="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:latest-python${PYTHON_VERSION}-${TAG_PREFIX}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE_LATEST_DEFAULT="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:latest-${TAG_PREFIX}-ci-slim"
 
-    export AIRFLOW_CI_IMAGE="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${AIRFLOW_VERSION}-python${PYTHON_VERSION}-ci"
-    export AIRFLOW_CI_IMAGE_DEFAULT="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${AIRFLOW_VERSION}-ci"
-    export AIRFLOW_CI_IMAGE_LATEST="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:latest-python${PYTHON_VERSION}-${TAG_PREFIX}-ci"
-    export AIRFLOW_CI_IMAGE_LATEST_DEFAULT="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:latest-${TAG_PREFIX}-ci"
-
-    export AIRFLOW_CHECKLICENCE_IMAGE="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:checklicence"
+    export AIRFLOW_CI_IMAGE="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${AIRFLOW_VERSION}-python${PYTHON_VERSION}-ci"
+    export AIRFLOW_CI_IMAGE_CACHE="${CACHE_CONTAINER_REGISTRY}/${CACHE_CONTAINER_REPO}:${AIRFLOW_VERSION}-python${PYTHON_VERSION}-ci"
+    export AIRFLOW_CI_IMAGE_DEFAULT="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${AIRFLOW_VERSION}-ci"
+    export AIRFLOW_CI_IMAGE_LATEST="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:latest-python${PYTHON_VERSION}-${TAG_PREFIX}-ci"
+    export AIRFLOW_CI_IMAGE_LATEST_DEFAULT="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:latest-${TAG_PREFIX}-ci"
+    export AIRFLOW_CHECKLICENCE_IMAGE="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:checklicence"
+    export AIRFLOW_CHECKLICENCE_IMAGE_CACHE="${CACHE_CONTAINER_REGISTRY}/${CACHE_CONTAINER_REPO}:checklicence"
 else
-    export AIRFLOW_SLIM_CI_IMAGE="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${TAG_PREFIX}-python${PYTHON_VERSION}-ci-slim"
-    export AIRFLOW_SLIM_CI_IMAGE_DEFAULT="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${TAG_PREFIX}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${TAG_PREFIX}-python${PYTHON_VERSION}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE_CACHE="${CACHE_CONTAINER_REGISTRY}/${CACHE_CONTAINER_REPO}:${TAG_PREFIX}-python${PYTHON_VERSION}-ci-slim"
+    export AIRFLOW_SLIM_CI_IMAGE_DEFAULT="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${TAG_PREFIX}-ci-slim"
 
-    export AIRFLOW_CI_IMAGE="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${TAG_PREFIX}-python${PYTHON_VERSION}-ci"
-    export AIRFLOW_CI_IMAGE_DEFAULT="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:${TAG_PREFIX}-ci"
-    export AIRFLOW_CHECKLICENCE_IMAGE="${DOCKERHUB_USER}/${DOCKERHUB_REPO}:checklicence"
+    export AIRFLOW_CI_IMAGE="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${TAG_PREFIX}-python${PYTHON_VERSION}-ci"
+    export AIRFLOW_CI_IMAGE_CACHE="${CACHE_CONTAINER_REGISTRY}/${CACHE_CONTAINER_REPO}:${TAG_PREFIX}-python${PYTHON_VERSION}-ci"
+    export AIRFLOW_CI_IMAGE_DEFAULT="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:${TAG_PREFIX}-ci"
+    export AIRFLOW_CHECKLICENCE_IMAGE="${CONTAINER_REGISTRY}/${CONTAINER_REPO}:checklicence"
+    export AIRFLOW_CHECKLICENCE_IMAGE_CACHE="${CACHE_CONTAINER_REGISTRY}/${CACHE_CONTAINER_REPO}:checklicence"
 fi
 # In the future we can enable buildkit.
 # It's experimental now and cache does not work out of the box with buildkit in Docker 18.09.2, buildkit 0.3.3
@@ -412,17 +429,17 @@ if [[ "${AIRFLOW_CONTAINER_USE_PULLED_IMAGES_CACHE}" == "true" ]]; then
     if [[ "${AIRFLOW_CONTAINER_SKIP_CI_IMAGE}" == "true" ]]; then
         echo "Skip downloading the CI Airflow image"
     else
-        IMAGES_TO_PULL="${IMAGES_TO_PULL} ${AIRFLOW_CI_IMAGE}"
+        IMAGES_TO_PULL="${IMAGES_TO_PULL} ${AIRFLOW_CI_IMAGE_CACHE}"
     fi
     if [[ "${AIRFLOW_CONTAINER_SKIP_SLIM_CI_IMAGE}" == "true" ]]; then
         echo "Skip downloading the slim Airflow image"
     else
-        IMAGES_TO_PULL="${IMAGES_TO_PULL} ${AIRFLOW_SLIM_CI_IMAGE}"
+        IMAGES_TO_PULL="${IMAGES_TO_PULL} ${AIRFLOW_SLIM_CI_IMAGE_CACHE}"
     fi
     if [[ "${AIRFLOW_CONTAINER_SKIP_CHECKLICENCE_IMAGE}" == "true" ]]; then
         echo "Skip downloading the CHECKLICENCE Airflow image"
     else
-        IMAGES_TO_PULL="${IMAGES_TO_PULL} ${AIRFLOW_CHECKLICENCE_IMAGE}"
+        IMAGES_TO_PULL="${IMAGES_TO_PULL} ${AIRFLOW_CHECKLICENCE_IMAGE_CACHE}"
     fi
 
     for IMAGE in ${IMAGES_TO_PULL}
@@ -464,11 +481,11 @@ if [[ "${AIRFLOW_CONTAINER_USE_PULLED_IMAGES_CACHE}" == "true" ]]; then
             fi
         fi
         if [[ "${IMAGE}" == "${AIRFLOW_CI_IMAGE}" ]]; then
-            DOCKER_CACHE_DIRECTIVE_CI+=("--cache-from" "${IMAGE}")
+            DOCKER_CACHE_DIRECTIVE_CI+=("--cache-from" "${AIRFLOW_CI_IMAGE_CACHE}")
         elif [[ "${IMAGE}" == "${AIRFLOW_SLIM_CI_IMAGE}" ]]; then
-            DOCKER_CACHE_DIRECTIVE_CI_SLIM+=("--cache-from" "${IMAGE}")
+            DOCKER_CACHE_DIRECTIVE_CI_SLIM+=("--cache-from" "${AIRFLOW_SLIM_CI_IMAGE_CACHE}")
         elif [[ "${IMAGE}" == "${AIRFLOW_CHECKLICENCE_IMAGE}" ]]; then
-            DOCKER_CACHE_DIRECTIVE_CHECKLICENCE+=("--cache-from" "${IMAGE}")
+            DOCKER_CACHE_DIRECTIVE_CHECKLICENCE+=("--cache-from" "${AIRFLOW_CHECKLICENCE_IMAGE_CACHE}")
         else
             echo
             echo "Don't know how to set cache directive for ${IMAGE}. Exiting"

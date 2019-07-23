@@ -20,23 +20,9 @@ set -euo pipefail
 
 MY_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# shellcheck source=./_utils.sh
-. "${MY_DIR}/_utils.sh"
+cd "${MY_DIR}"
 
-basic_sanity_checks
+docker build -f Dockerfile-builder . -t eu.gcr.io/apache-airflow-testing/builder
 
-force_python_3_5
+docker push eu.gcr.io/apache-airflow-testing/builder
 
-script_start
-
-rebuild_image_if_needed_for_static_checks
-
-docker run "${AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS[@]}" -t \
-       --entrypoint /opt/airflow/docs/build.sh \
-       --env PYTHONDONTWRITEBYTECODE="true" \
-       --env AIRFLOW_CI_VERBOSE="${VERBOSE}" \
-       --env HOST_USER_ID="$(id -ur)" \
-       --env HOST_GROUP_ID="$(id -gr)" \
-       "${AIRFLOW_SLIM_CI_IMAGE}"
-
-script_end

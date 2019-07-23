@@ -8,9 +8,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-# 
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -27,6 +27,11 @@ echo
 echo "Working in ${MY_DIR} folder"
 echo
 
+TTY=$(tty)
+
+echo
+echo "Terminal device: ${TTY}"
+echo
 
 if [[ -f /.dockerenv ]]; then
     # This script can be run both - in container and outside of it.
@@ -59,7 +64,7 @@ echo "Removed content of the _build and _api folders"
 set +e
 # shellcheck disable=SC2063
 NUM_INCORRECT_USE_LITERALINCLUDE=$(grep -inR --include \*.rst 'literalinclude::.\+example_dags' . | \
-    tee /dev/tty |
+    tee "${TTY}" |
     wc -l |\
     tr -d '[:space:]')
 set -e
@@ -82,11 +87,11 @@ else
 fi
 
 SUCCEED_LINE=$(make html |\
-    tee /dev/tty |\
+    tee "${TTY}" |\
     grep 'build succeeded' |\
     head -1)
 
-NUM_CURRENT_WARNINGS=$(echo ${SUCCEED_LINE} |\
+NUM_CURRENT_WARNINGS=$(echo "${SUCCEED_LINE}" |\
     sed -E 's/build succeeded, ([0-9]+) warnings?\./\1/g')
 
 if [[  -f /.dockerenv ]]; then

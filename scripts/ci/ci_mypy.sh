@@ -33,19 +33,19 @@ rebuild_image_if_needed_for_static_checks
 
 FILES=("$@")
 if [[ "${#FILES[@]}" == "0" ]]; then
-    docker run "${AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS[@]}" \
+    docker run "${AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS[@]}" \
         --entrypoint /opt/airflow/scripts/ci/in_container/run_mypy.sh \
         --env PYTHONDONTWRITEBYTECODE="true" \
-        --env AIRFLOW_CI_VERBOSE=${VERBOSE} \
+        --env AIRFLOW_CI_VERBOSE="${VERBOSE}" \
         --env HOST_USER_ID="$(id -ur)" \
         --env HOST_GROUP_ID="$(id -gr)" \
         "${AIRFLOW_SLIM_CI_IMAGE}" \
         "airflow" "tests" | tee -a "${OUTPUT_LOG}"
 else
-    docker run "${AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS[@]}" \
+    docker run "${AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS[@]}" \
         --entrypoint /opt/airflow/scripts/ci/in_container/run_mypy.sh \
         --env PYTHONDONTWRITEBYTECODE="true" \
-        --env AIRFLOW_CI_VERBOSE=${VERBOSE} \
+        --env AIRFLOW_CI_VERBOSE="${VERBOSE}" \
         --env HOST_USER_ID="$(id -ur)" \
         --env HOST_GROUP_ID="$(id -gr)" \
         "${AIRFLOW_SLIM_CI_IMAGE}" \

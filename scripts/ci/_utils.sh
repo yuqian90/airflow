@@ -51,17 +51,18 @@ export AIRFLOW_CONTAINER_BRANCH_NAME=${AIRFLOW_CONTAINER_BRANCH_NAME:=${DEFAULT_
 # Sets mounting of host volumes to container for static checks
 # unless AIRFLOW_MOUNT_HOST_VOLUMES_FOR_STATIC_CHECKS is not true
 #
-# Note that this cannot be function because we need the AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS array variable
+# Note that this cannot be function because we need the
+# AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS array variable
 #
 AIRFLOW_MOUNT_HOST_VOLUMES_FOR_STATIC_CHECKS=${AIRFLOW_MOUNT_HOST_VOLUMES_FOR_STATIC_CHECKS:="true"}
 
 
-declare -a AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS
+declare -a AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS
 if [[ ${AIRFLOW_MOUNT_HOST_VOLUMES_FOR_STATIC_CHECKS} == "true" ]]; then
     echo
     echo "Mounting host volumes to Docker"
     echo
-    AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS=( \
+    AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS=( \
       "-v" "${AIRFLOW_SOURCES}/airflow:/opt/airflow/airflow:cached" \
       "-v" "${AIRFLOW_SOURCES}/.mypy_cache:/opt/airflow/.mypy_cache:cached" \
       "-v" "${AIRFLOW_SOURCES}/dev:/opt/airflow/dev:cached" \
@@ -83,12 +84,12 @@ else
     echo
     echo "Skip mounting host volumes to Docker"
     echo
-    AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS=( \
+    AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS=( \
         "-e" "PYTHONDONTWRITEBYTECODE=true" \
     )
 fi
 
-export AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS
+export AIRFLOW_CONTAINER_EXTRA_DOCKER_FLAGS_FOR_STATIC_CHECKS
 
 #
 # Creates cache directory where we will keep temporary files needed for the build
@@ -277,15 +278,21 @@ function check_if_coreutils_installed() {
 # Asserts that we are not inside of the container
 #
 function assert_not_in_container() {
-    if [[ -f /.dockerenv ]]; then
-        echo >&2
-        echo >&2 "You are inside the Airflow docker container!"
-        echo >&2 "You should only run this script from the host."
-        echo >&2 "Learn more about how we develop and test airflow in:"
-        echo >&2 "https://github.com/apache/airflow/blob/master/CONTRIBUTING.md"
-        echo >&2
-        exit 1
-    fi
+  if [[ ${CI} != "true" ]]; then
+      if [[ -f /.dockerenv ]]; then
+          echo >&2
+          echo >&2 "You are inside the Airflow docker container!"
+          echo >&2 "You should only run this script from the host."
+          echo >&2 "Learn more about how we develop and test airflow in:"
+          echo >&2 "https://github.com/apache/airflow/blob/master/CONTRIBUTING.md"
+          echo >&2
+          exit 1
+      fi
+  else
+    echo
+    echo "CI variable is set to ${CI}. We are likely running in Kubernetes' Docker in GitLab"
+    echo
+  fi
 }
 
 #
@@ -395,8 +402,8 @@ EOF
         export AIRFLOW_CONTAINER_DOCKER_BUILD_NEEDED="true"
     fi
 
-    export DOCKERHUB_USER=${DOCKERHUB_USER:="apache"}
-    export DOCKERHUB_REPO=${DOCKERHUB_REPO:="airflow"}
+    export CONTAINER_REGISTRY=${CONTAINER_REGISTRY:="apache"}
+    export CONTAINER_REPO=${CONTAINER_REPO:="airflow"}
     export AIRFLOW_CONTAINER_PUSH_IMAGES="false"
     export AIRFLOW_CONTAINER_CI_OPTIMISED_BUILD="true"
 
@@ -458,7 +465,7 @@ function rebuild_image_for_checklicence() {
 #
 function script_start {
     echo
-    echo "Running $(basename $0)"
+    echo "Running $(basename "$0")"
     echo
     echo "Log is redirected to ${OUTPUT_LOG}"
     echo
@@ -488,7 +495,7 @@ function script_end {
     END_SCRIPT_TIME=$(date +%s)
     RUN_SCRIPT_TIME=$((END_SCRIPT_TIME-START_SCRIPT_TIME))
     echo
-    echo "Finished the script $(basename $0)"
+    echo "Finished the script $(basename "$0")"
     echo "It took ${RUN_SCRIPT_TIME} seconds"
     echo
 }

@@ -15,15 +15,13 @@
 #
 # WARNING: THIS DOCKERFILE IS NOT INTENDED FOR PRODUCTION USE OR DEPLOYMENT.
 #
-FROM debian:stretch-slim
+FROM python:3.6-buster
 
 SHELL ["/bin/bash", "-o", "pipefail", "-e", "-u", "-x", "-c"]
 
 # Make sure noninteractie debian install is used and language variables set
 ENV DEBIAN_FRONTEND=noninteractive LANGUAGE=C.UTF-8 LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     LC_CTYPE=C.UTF-8 LC_MESSAGES=C.UTF-8
-
-ENV JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64/
 
 # Note missing man directories on debian-stretch
 # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=863199
@@ -32,46 +30,43 @@ RUN mkdir -pv /usr/share/man/man1 \
     && mkdir -pv /usr/share/man/man7 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-            sudo \
+        apt-transport-https \
+            ca-certificates \
             curl \
-            openjdk-8-jdk \
+            sudo \
+            gnupg2 \
+            coreutils \
+            software-properties-common \
     && apt-get autoremove -yqq --purge \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-ARG RAT_VERSION="0.12"
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add -
 
-ENV RAT_VERSION="${RAT_VERSION}" \
-    RAT_JAR="/tmp/apache-rat-${RAT_VERSION}.jar" \
-    RAT_URL="http://repo1.maven.org/maven2/org/apache/rat/apache-rat/${RAT_VERSION}/apache-rat-${RAT_VERSION}.jar"
+RUN sudo add-apt-repository \
+       "deb [arch=amd64] https://download.docker.com/linux/debian \
+       $(lsb_release -cs) \
+       stable"
 
-RUN echo "Downloading RAT from ${RAT_URL} to ${RAT_JAR}" \
-    && curl -sL ${RAT_URL} > ${RAT_JAR}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-compose \
+    && apt-get autoremove -yqq --purge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-ARG AIRFLOW_USER=airflow
-ENV AIRFLOW_USER=${AIRFLOW_USER}
+ARG GOLANG_VERSION=1.12.7
+ENV GOLANG_VERSION=${GOLANG_VERSION}
 
-ARG HOME=/home/airflow
-ENV HOME=${HOME}
+RUN curl -fsSL https://dl.google.com/go/go${GOLANG_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz
+ENV PATH=${PATH}:/usr/local/go/bin
 
-ARG AIRFLOW_HOME=${HOME}/airflow
-ENV AIRFLOW_HOME=${AIRFLOW_HOME}
+RUN go get sigs.k8s.io/kind
 
-ARG AIRFLOW_SOURCES=/opt/airflow
-ENV AIRFLOW_SOURCES=${AIRFLOW_SOURCES}
-
-RUN adduser airflow \
-    && echo "airflow ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/airflow \
-    && chmod 0440 /etc/sudoers.d/airflow
-
-COPY --chown=airflow:airflow scripts ${AIRFLOW_SOURCES}/scripts
-
-# Kaniko does not support --chown flag so we have to (just in case)
-# Change the ownership of the files
-RUN chown -R airflow:airflow ${AIRFLOW_SOURCES}
-
-USER airflow
-
-WORKDIR ${AIRFLOW_SOURCES}
-
-ENTRYPOINT ["/opt/airflow/scripts/ci/in_container/run_check_licence.sh"]
+ENV PATH=${PATH}:/root/go/bin/
+# Docker in docker uses 2375 port and no TLS verification
+ENV DOCKER_TLS_VERIFY=""
+ENV DOCKER_HOST=tcp://localhost:2375
