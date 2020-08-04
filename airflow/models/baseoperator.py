@@ -324,9 +324,11 @@ class BaseOperator(LoggingMixin):
         do_xcom_push=True,  # type: bool
         inlets=None,  # type: Optional[Dict]
         outlets=None,  # type: Optional[Dict]
+        task_group=None,
         *args,
         **kwargs
     ):
+        from airflow.utils.task_group import TaskGroupContext
 
         if args or kwargs:
             # TODO remove *args and **kwargs in Airflow 2.0
@@ -341,6 +343,11 @@ class BaseOperator(LoggingMixin):
             )
         validate_key(task_id)
         self.task_id = task_id
+        self.label = task_id
+        task_group = task_group or TaskGroupContext.get_current_task_group(dag)
+        if task_group:
+            self.task_id = task_group.child_id(task_id)
+            task_group.add(self)
         self.owner = owner
         self.email = email
         self.email_on_retry = email_on_retry
@@ -1038,6 +1045,11 @@ class BaseOperator(LoggingMixin):
         Set a task or a task list to be directly downstream from the current
         task.
         """
+        from airflow.utils.task_group import TaskGroup
+
+        if isinstance(task_or_task_list, TaskGroup):
+            task_or_task_list.upstream_task_ids.add(self.task_id)
+            task_or_task_list = list(task_or_task_list.get_roots())
         self._set_relatives(task_or_task_list, upstream=False)
 
     def set_upstream(self, task_or_task_list):
@@ -1045,6 +1057,11 @@ class BaseOperator(LoggingMixin):
         Set a task or a task list to be directly upstream from the current
         task.
         """
+        from airflow.utils.task_group import TaskGroup
+
+        if isinstance(task_or_task_list, TaskGroup):
+            task_or_task_list.downstream_task_ids.add(self.task_id)
+            task_or_task_list = list(task_or_task_list.get_leaves())
         self._set_relatives(task_or_task_list, upstream=True)
 
     def xcom_push(
