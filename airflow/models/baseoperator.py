@@ -27,8 +27,9 @@ import warnings
 
 from abc import ABCMeta, abstractmethod
 from datetime import datetime, timedelta
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, Optional, Set, Type, Union
-
+from typing import (
+    Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Type, Union
+)
 
 import attr
 from cached_property import cached_property
@@ -43,6 +44,7 @@ from airflow.lineage import prepare_lineage, apply_lineage, DataSet
 from airflow.models.dag import DAG
 from airflow.models.pool import Pool
 from airflow.models.taskinstance import TaskInstance, clear_task_instances
+from airflow.models.taskmixin import TaskMixin
 from airflow.models.xcom import XCOM_RETURN_KEY
 from airflow.ti_deps.deps.not_in_retry_period_dep import NotInRetryPeriodDep
 from airflow.ti_deps.deps.not_previously_skipped_dep import NotPreviouslySkippedDep
@@ -59,7 +61,7 @@ from airflow.utils.weight_rule import WeightRule
 
 
 @functools.total_ordering
-class BaseOperator(LoggingMixin):
+class BaseOperator(LoggingMixin, TaskMixin):
     """
     Abstract base class for all operators. Since operators create objects that
     become nodes in the dag, BaseOperator contains many recursive methods for
@@ -324,9 +326,11 @@ class BaseOperator(LoggingMixin):
         do_xcom_push=True,  # type: bool
         inlets=None,  # type: Optional[Dict]
         outlets=None,  # type: Optional[Dict]
+        task_group=None,
         *args,
         **kwargs
     ):
+        from airflow.utils.task_group import TaskGroupContext
 
         if args or kwargs:
             # TODO remove *args and **kwargs in Airflow 2.0
@@ -341,6 +345,11 @@ class BaseOperator(LoggingMixin):
             )
         validate_key(task_id)
         self.task_id = task_id
+        self.label = task_id
+        task_group = task_group or TaskGroupContext.get_current_task_group(dag)
+        if task_group:
+            self.task_id = task_group.child_id(task_id)
+            task_group.add(self)
         self.owner = owner
         self.email = email
         self.email_on_retry = email_on_retry
@@ -472,13 +481,14 @@ class BaseOperator(LoggingMixin):
                 hash_components.append(repr(val))
         return hash(tuple(hash_components))
 
-    # Composing Operators -----------------------------------------------
-
     def __rshift__(self, other):
         """
         Implements Self >> Other == self.set_downstream(other)
 
         If "Other" is a DAG, the DAG is assigned to the Operator.
+
+        NOTE: This method is supposed to have moved to TaskMixin. But this override is needed
+        here because of this special treatment for DAG. It can be removed in Airflow 2.0.
         """
         if isinstance(other, DAG):
             # if this dag is already assigned, do nothing
@@ -494,6 +504,9 @@ class BaseOperator(LoggingMixin):
         Implements Self << Other == self.set_upstream(other)
 
         If "Other" is a DAG, the DAG is assigned to the Operator.
+
+        NOTE: This method is supposed to have moved to TaskMixin. But this override is needed
+        here because of this special treatment for DAG. It can be removed in Airflow 2.0.
         """
         if isinstance(other, DAG):
             # if this dag is already assigned, do nothing
@@ -503,24 +516,6 @@ class BaseOperator(LoggingMixin):
         else:
             self.set_upstream(other)
         return other
-
-    def __rrshift__(self, other):
-        """
-        Called for [DAG] >> [Operator] because DAGs don't have
-        __rshift__ operators.
-        """
-        self.__lshift__(other)
-        return self
-
-    def __rlshift__(self, other):
-        """
-        Called for [DAG] << [Operator] because DAGs don't have
-        __lshift__ operators.
-        """
-        self.__rshift__(other)
-        return self
-
-    # /Composing Operators ---------------------------------------------
 
     @property
     def dag(self):
@@ -989,12 +984,30 @@ class BaseOperator(LoggingMixin):
         else:
             item_set.add(item)
 
-    def _set_relatives(self, task_or_task_list, upstream=False):
-        """Sets relatives for the task."""
-        try:
-            task_list = list(task_or_task_list)
-        except TypeError:
-            task_list = [task_or_task_list]
+    @property
+    def roots(self):
+        """Required by TaskMixin"""
+        return [self]
+
+    @property
+    def leaves(self):
+        """Required by TaskMixin"""
+        return [self]
+
+    def _set_relatives(
+        self,
+        task_or_task_list,  # type: Union[TaskMixin, Sequence[TaskMixin]]
+        upstream=False,
+    ):
+        """Sets relatives for the task or task list."""
+        if not isinstance(task_or_task_list, Sequence):
+            task_or_task_list = [task_or_task_list]
+
+        task_list = []  # type: List["BaseOperator"]
+        for task_object in task_or_task_list:
+            task_object.update_relative(self, not upstream)
+            relatives = task_object.leaves if upstream else task_object.roots
+            task_list.extend(relatives)
 
         for task in task_list:
             if not isinstance(task, BaseOperator):
@@ -1005,8 +1018,8 @@ class BaseOperator(LoggingMixin):
         # relationships can only be set if the tasks share a single DAG. Tasks
         # without a DAG are assigned to that DAG.
         dags = {
-            task._dag.dag_id: task._dag  # pylint: disable=protected-access
-            for task in [self] + task_list if task.has_dag()}
+            task._dag.dag_id: task._dag  # type: ignore  # pylint: disable=protected-access,no-member
+            for task in self.roots + task_list if task.has_dag()}  # pylint: disable=no-member
 
         if len(dags) > 1:
             raise AirflowException(
@@ -1036,14 +1049,14 @@ class BaseOperator(LoggingMixin):
     def set_downstream(self, task_or_task_list):
         """
         Set a task or a task list to be directly downstream from the current
-        task.
+        task. Required by TaskMixin.
         """
         self._set_relatives(task_or_task_list, upstream=False)
 
     def set_upstream(self, task_or_task_list):
         """
         Set a task or a task list to be directly upstream from the current
-        task.
+        task. Required by TaskMixin.
         """
         self._set_relatives(task_or_task_list, upstream=True)
 
