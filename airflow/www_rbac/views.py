@@ -1737,7 +1737,8 @@ class Airflow(AirflowBaseView):
             dag = dag.sub_dag(
                 task_regex=root,
                 include_upstream=True,
-                include_downstream=False)
+                include_downstream=False,
+                update_task_group=True)
 
         arrange = request.args.get('arrange', dag.orientation)
 
