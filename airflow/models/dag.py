@@ -968,6 +968,7 @@ class DAG(BaseDag, LoggingMixin):
             recursion_depth=0,
             max_recursion_depth=None,
             dag_bag=None,
+            visited_external_tis=None,
     ):
         """
         Clears a set of task instances associated with the current dag for
@@ -1004,6 +1005,9 @@ class DAG(BaseDag, LoggingMixin):
         :type max_recursion_depth: int
         :param dag_bag: The DagBag used to find the dags
         :type dag_bag: airflow.models.dagbag.DagBag
+        :param visited_external_tis: A set used internally to keep track of the visited TaskInstance when
+            clearing tasks across multiple DAGs linked by ExternalTaskMarker to avoid redundant work.
+        :type visited_external_tis: set
         """
         TI = TaskInstance
         tis = session.query(TI)
@@ -1039,7 +1043,8 @@ class DAG(BaseDag, LoggingMixin):
                 session=session,
                 recursion_depth=recursion_depth,
                 max_recursion_depth=max_recursion_depth,
-                dag_bag=dag_bag
+                dag_bag=dag_bag,
+                visited_external_tis=visited_external_tis
             ))
 
         if start_date:
@@ -1060,50 +1065,56 @@ class DAG(BaseDag, LoggingMixin):
             instances = tis.all()
             for ti in instances:
                 if ti.operator == ExternalTaskMarker.__name__:
-                    ti.task = copy.copy(self.get_task(ti.task_id))
+                    if visited_external_tis is None:
+                        visited_external_tis = set()
+                    ti_key = ti.key
+                    if ti_key not in visited_external_tis:
+                        ti.task = copy.copy(self.get_task(ti.task_id))
 
-                    if recursion_depth == 0:
-                        # Maximum recursion depth allowed is the recursion_depth of the first
-                        # ExternalTaskMarker in the tasks to be cleared.
-                        max_recursion_depth = ti.task.recursion_depth
+                        if recursion_depth == 0:
+                            # Maximum recursion depth allowed is the recursion_depth of the first
+                            # ExternalTaskMarker in the tasks to be cleared.
+                            max_recursion_depth = ti.task.recursion_depth
 
-                    if recursion_depth + 1 > max_recursion_depth:
-                        # Prevent cycles or accidents.
-                        raise AirflowException("Maximum recursion depth {} reached for {} {}. "
-                                               "Attempted to clear too many tasks "
-                                               "or there may be a cyclic dependency."
-                                               .format(max_recursion_depth,
-                                                       ExternalTaskMarker.__name__, ti.task_id))
-                    ti.render_templates()
-                    external_tis = session.query(TI).filter(TI.dag_id == ti.task.external_dag_id,
-                                                            TI.task_id == ti.task.external_task_id,
-                                                            TI.execution_date ==
-                                                            pendulum.parse(ti.task.execution_date))
+                        if recursion_depth + 1 > max_recursion_depth:
+                            # Prevent cycles or accidents.
+                            raise AirflowException("Maximum recursion depth {} reached for {} {}. "
+                                                "Attempted to clear too many tasks "
+                                                "or there may be a cyclic dependency."
+                                                .format(max_recursion_depth,
+                                                        ExternalTaskMarker.__name__, ti.task_id))
+                        ti.render_templates()
+                        external_tis = session.query(TI).filter(TI.dag_id == ti.task.external_dag_id,
+                                                                TI.task_id == ti.task.external_task_id,
+                                                                TI.execution_date ==
+                                                                pendulum.parse(ti.task.execution_date))
 
-                    for tii in external_tis:
-                        if not dag_bag:
-                            dag_bag = DagBag()
-                        external_dag = dag_bag.get_dag(tii.dag_id)
-                        if not external_dag:
-                            raise AirflowException("Could not find dag {}".format(tii.dag_id))
-                        downstream = external_dag.sub_dag(
-                            task_regex=r"^{}$".format(tii.task_id),
-                            include_upstream=False,
-                            include_downstream=True
-                        )
-                        tis = tis.union(downstream.clear(start_date=tii.execution_date,
-                                                         end_date=tii.execution_date,
-                                                         only_failed=only_failed,
-                                                         only_running=only_running,
-                                                         confirm_prompt=confirm_prompt,
-                                                         include_subdags=include_subdags,
-                                                         include_parentdag=False,
-                                                         reset_dag_runs=reset_dag_runs,
-                                                         get_tis=True,
-                                                         session=session,
-                                                         recursion_depth=recursion_depth + 1,
-                                                         max_recursion_depth=max_recursion_depth,
-                                                         dag_bag=dag_bag))
+                        for tii in external_tis:
+                            if not dag_bag:
+                                dag_bag = DagBag()
+                            external_dag = dag_bag.get_dag(tii.dag_id)
+                            if not external_dag:
+                                raise AirflowException("Could not find dag {}".format(tii.dag_id))
+                            downstream = external_dag.sub_dag(
+                                task_regex=r"^{}$".format(tii.task_id),
+                                include_upstream=False,
+                                include_downstream=True
+                            )
+                            tis = tis.union(downstream.clear(start_date=tii.execution_date,
+                                                            end_date=tii.execution_date,
+                                                            only_failed=only_failed,
+                                                            only_running=only_running,
+                                                            confirm_prompt=confirm_prompt,
+                                                            include_subdags=include_subdags,
+                                                            include_parentdag=False,
+                                                            reset_dag_runs=reset_dag_runs,
+                                                            get_tis=True,
+                                                            session=session,
+                                                            recursion_depth=recursion_depth + 1,
+                                                            max_recursion_depth=max_recursion_depth,
+                                                            dag_bag=dag_bag,
+                                                            visited_external_tis=visited_external_tis))
+                            visited_external_tis.add(ti_key)
 
         if get_tis:
             return tis
