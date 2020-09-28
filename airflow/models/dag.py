@@ -968,6 +968,7 @@ class DAG(BaseDag, LoggingMixin):
             recursion_depth=0,
             max_recursion_depth=None,
             dag_bag=None,
+            visited_external_tis=None,
     ):
         """
         Clears a set of task instances associated with the current dag for
@@ -1004,6 +1005,9 @@ class DAG(BaseDag, LoggingMixin):
         :type max_recursion_depth: int
         :param dag_bag: The DagBag used to find the dags
         :type dag_bag: airflow.models.dagbag.DagBag
+        :param visited_external_tis: A set used internally to keep track of the visited TaskInstance when
+            clearing tasks across multiple DAGs linked by ExternalTaskMarker to avoid redundant work.
+        :type visited_external_tis: set
         """
         TI = TaskInstance
         tis = session.query(TI)
@@ -1039,7 +1043,8 @@ class DAG(BaseDag, LoggingMixin):
                 session=session,
                 recursion_depth=recursion_depth,
                 max_recursion_depth=max_recursion_depth,
-                dag_bag=dag_bag
+                dag_bag=dag_bag,
+                visited_external_tis=visited_external_tis
             ))
 
         if start_date:
@@ -1060,50 +1065,56 @@ class DAG(BaseDag, LoggingMixin):
             instances = tis.all()
             for ti in instances:
                 if ti.operator == ExternalTaskMarker.__name__:
-                    ti.task = copy.copy(self.get_task(ti.task_id))
+                    if visited_external_tis is None:
+                        visited_external_tis = set()
+                    ti_key = ti.key
+                    if ti_key not in visited_external_tis:
+                        ti.task = copy.copy(self.get_task(ti.task_id))
 
-                    if recursion_depth == 0:
-                        # Maximum recursion depth allowed is the recursion_depth of the first
-                        # ExternalTaskMarker in the tasks to be cleared.
-                        max_recursion_depth = ti.task.recursion_depth
+                        if recursion_depth == 0:
+                            # Maximum recursion depth allowed is the recursion_depth of the first
+                            # ExternalTaskMarker in the tasks to be cleared.
+                            max_recursion_depth = ti.task.recursion_depth
 
-                    if recursion_depth + 1 > max_recursion_depth:
-                        # Prevent cycles or accidents.
-                        raise AirflowException("Maximum recursion depth {} reached for {} {}. "
-                                               "Attempted to clear too many tasks "
-                                               "or there may be a cyclic dependency."
-                                               .format(max_recursion_depth,
-                                                       ExternalTaskMarker.__name__, ti.task_id))
-                    ti.render_templates()
-                    external_tis = session.query(TI).filter(TI.dag_id == ti.task.external_dag_id,
-                                                            TI.task_id == ti.task.external_task_id,
-                                                            TI.execution_date ==
-                                                            pendulum.parse(ti.task.execution_date))
+                        if recursion_depth + 1 > max_recursion_depth:
+                            # Prevent cycles or accidents.
+                            raise AirflowException("Maximum recursion depth {} reached for {} {}. "
+                                                "Attempted to clear too many tasks "
+                                                "or there may be a cyclic dependency."
+                                                .format(max_recursion_depth,
+                                                        ExternalTaskMarker.__name__, ti.task_id))
+                        ti.render_templates()
+                        external_tis = session.query(TI).filter(TI.dag_id == ti.task.external_dag_id,
+                                                                TI.task_id == ti.task.external_task_id,
+                                                                TI.execution_date ==
+                                                                pendulum.parse(ti.task.execution_date))
 
-                    for tii in external_tis:
-                        if not dag_bag:
-                            dag_bag = DagBag()
-                        external_dag = dag_bag.get_dag(tii.dag_id)
-                        if not external_dag:
-                            raise AirflowException("Could not find dag {}".format(tii.dag_id))
-                        downstream = external_dag.sub_dag(
-                            task_regex=r"^{}$".format(tii.task_id),
-                            include_upstream=False,
-                            include_downstream=True
-                        )
-                        tis = tis.union(downstream.clear(start_date=tii.execution_date,
-                                                         end_date=tii.execution_date,
-                                                         only_failed=only_failed,
-                                                         only_running=only_running,
-                                                         confirm_prompt=confirm_prompt,
-                                                         include_subdags=include_subdags,
-                                                         include_parentdag=False,
-                                                         reset_dag_runs=reset_dag_runs,
-                                                         get_tis=True,
-                                                         session=session,
-                                                         recursion_depth=recursion_depth + 1,
-                                                         max_recursion_depth=max_recursion_depth,
-                                                         dag_bag=dag_bag))
+                        for tii in external_tis:
+                            if not dag_bag:
+                                dag_bag = DagBag()
+                            external_dag = dag_bag.get_dag(tii.dag_id)
+                            if not external_dag:
+                                raise AirflowException("Could not find dag {}".format(tii.dag_id))
+                            downstream = external_dag.sub_dag(
+                                task_regex=r"^{}$".format(tii.task_id),
+                                include_upstream=False,
+                                include_downstream=True
+                            )
+                            tis = tis.union(downstream.clear(start_date=tii.execution_date,
+                                                             end_date=tii.execution_date,
+                                                             only_failed=only_failed,
+                                                             only_running=only_running,
+                                                             confirm_prompt=confirm_prompt,
+                                                             include_subdags=include_subdags,
+                                                             include_parentdag=False,
+                                                             reset_dag_runs=reset_dag_runs,
+                                                             get_tis=True,
+                                                             session=session,
+                                                             recursion_depth=recursion_depth + 1,
+                                                             max_recursion_depth=max_recursion_depth,
+                                                             dag_bag=dag_bag,
+                                                             visited_external_tis=visited_external_tis))
+                        visited_external_tis.add(ti_key)
 
         if get_tis:
             return tis
@@ -1228,12 +1239,15 @@ class DAG(BaseDag, LoggingMixin):
         """
         from airflow.models.baseoperator import BaseOperator
 
-        # deep-copying self.task_dict takes a long time, and we don't want all
+        # deep-copying self.task_dict and self._task_group takes a long time, and we don't want all
         # the tasks anyway, so we copy the tasks manually later
         task_dict = self.task_dict
+        task_group = self._task_group
         self.task_dict = {}
+        self._task_group = None
         dag = copy.deepcopy(self)
         self.task_dict = task_dict
+        self._task_group = task_group
 
         regex_match = [
             t for t in self.tasks if re.findall(task_regex, t.task_id)]
@@ -1249,24 +1263,30 @@ class DAG(BaseDag, LoggingMixin):
         dag.task_dict = {t.task_id: copy.deepcopy(t, {id(t.dag): dag})
                          for t in regex_match + also_include}
 
-        # Remove tasks not included in the subdag from task_group
-        def remove_excluded(group):
-            for child in list(group.children.values()):
+        def filter_task_group(group, parent_group):
+            """
+            Exclude tasks not included in the subdag from the given TaskGroup.
+            """
+            copied = copy.copy(group)
+            copied.used_group_ids = set(copied.used_group_ids)
+            copied._parent_group = parent_group
+
+            copied.children = {}
+
+            for child in group.children.values():
                 if isinstance(child, BaseOperator):
-                    if child.task_id not in dag.task_dict:
-                        group.children.pop(child.task_id)
-                    else:
-                        # The tasks in the subdag are a copy of tasks in the original dag
-                        # so update the reference in the TaskGroups too.
-                        group.children[child.task_id] = dag.task_dict[child.task_id]
+                    if child.task_id in dag.task_dict:
+                        copied.children[child.task_id] = dag.task_dict[child.task_id]
                 else:
-                    remove_excluded(child)
+                    filtered_child = filter_task_group(child, copied)
 
-                    # Remove this TaskGroup if it doesn't contain any tasks in this subdag
-                    if not child.children:
-                        group.children.pop(child.group_id)
+                    # Only include this child TaskGroup if it is non-empty.
+                    if filtered_child.children:
+                        copied.children[child.group_id] = filtered_child
 
-        remove_excluded(dag.task_group)
+            return copied
+
+        dag._task_group = filter_task_group(self._task_group, None)
 
         # Removing upstream/downstream references to tasks and TaskGroups that did not make
         # the cut.
