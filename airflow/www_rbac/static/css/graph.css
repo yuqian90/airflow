@@ -101,6 +101,10 @@ g.node.skipped rect {
   stroke: pink;
 }
 
+g.node.removed rect {
+  stroke: black;
+}
+
 div#svg_container {
   border: 1px solid #000;
   background-color: #eee;
