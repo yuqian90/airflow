@@ -1717,6 +1717,7 @@ class Airflow(AirflowBaseView):  # noqa: D101  pylint: disable=too-many-public-m
         future,
         past,
         state,
+        resume=False,
     ):
         dag = current_app.dag_bag.get_dag(dag_id)
         task = dag.get_task(task_id)
@@ -1732,16 +1733,44 @@ class Airflow(AirflowBaseView):  # noqa: D101  pylint: disable=too-many-public-m
         from airflow.api.common.experimental.mark_tasks import set_state
 
         if confirmed:
-            altered = set_state(
-                tasks=[task],
-                execution_date=execution_date,
-                upstream=upstream,
-                downstream=downstream,
-                future=future,
-                past=past,
-                state=state,
-                commit=True,
-            )
+            with create_session() as session:
+                altered = set_state(
+                    tasks=[task],
+                    execution_date=execution_date,
+                    upstream=upstream,
+                    downstream=downstream,
+                    future=future,
+                    past=past,
+                    state=state,
+                    commit=True,
+                    session=session,
+                )
+
+                if state == State.SUCCESS and resume:
+                    # If Resume is checked when marking success, clear downstream tasks that
+                    # are in upstream_failed state to resume them.
+
+                    # Flush the session so that the tasks marked success are reflected in the db.
+                    session.flush()
+                    subdag = dag.sub_dag(
+                        task_ids_or_regex=fr"^{task_id}$",
+                        include_downstream=True,
+                        include_upstream=False,
+                    )
+
+                    end_date = execution_date if not future else None
+                    start_date = execution_date if not past else None
+
+                    subdag.clear(
+                        start_date=start_date,
+                        end_date=end_date,
+                        include_subdags=True,
+                        include_parentdag=True,
+                        only_failed=True,
+                        session=session,
+                    )
+
+                session.commit()
 
             flash("Marked {} on {} task instances".format(state, len(altered)))
             return redirect(origin)
@@ -1821,6 +1850,7 @@ class Airflow(AirflowBaseView):  # noqa: D101  pylint: disable=too-many-public-m
         downstream = request.form.get('success_downstream') == "true"
         future = request.form.get('success_future') == "true"
         past = request.form.get('success_past') == "true"
+        resume = request.form.get('success_resume') == 'true'
 
         return self._mark_task_instance_state(
             dag_id,
@@ -1833,6 +1863,7 @@ class Airflow(AirflowBaseView):  # noqa: D101  pylint: disable=too-many-public-m
             future,
             past,
             State.SUCCESS,
+            resume=resume,
         )
 
     @expose('/tree')
