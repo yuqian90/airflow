@@ -516,7 +516,8 @@ For ``smart sensor``, you need to configure it in ``airflow.cfg``, for example:
 For more information on how to configure ``smart-sensor`` and its architecture, see:
 :doc:`Smart Sensor Architecture and Configuration<smart-sensor>`
 
-Timeout:
+Timeout
+-------
 
 All airflow tasks have an ``execution_timeout`` parameter. It applies to sensors too. It controls the
 maximum time allowed for every execution. If ``execution_timeout`` is breached, the task times out and
